@@ -84,7 +84,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     let fieldDescription = description.joined(separator: ",")
     let sql = """
     CREATE TABLE IF NOT EXISTS users (
-    id BIGINT PRIMARY KEY NOT NULL AUTOINCREMENT,
+    id BIGINT PRIMARY KEY NOT NULL AUTO_INCREMENT,
     salt VARCHAR(256), shadow VARCHAR(1024), \(fieldDescription))
     """
     guard db.query(statement: sql) else {
@@ -92,7 +92,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     }
     let sql2 = """
     CREATE TABLE IF NOT EXISTS tickets (
-    id VARCHAR(80) PRIMARY KEY NOT NULL,
+    id BIGINT PRIMARY KEY NOT NULL AUTO_INCREMENT,
     expiration INTEGER)
     """
     guard db.query(statement: sql2) else {
@@ -178,7 +178,7 @@ public class UDBMySQL<Profile>: UserDatabase {
         throw Exception.json
     }
     let properties:[String] = fields.map { $0.name }
-    let columns = ["id", "salt", "shadow"] + properties
+    let columns = ["salt", "shadow"] + properties
     let qmarks:[String] = Array(repeating: "?", count: columns.count)
     let col = columns.joined(separator: ",")
     let que = qmarks.joined(separator: ",")
@@ -257,7 +257,7 @@ public class UDBMySQL<Profile>: UserDatabase {
         }
       }
       guard
-        let id = _id, let salt = _salt, let shadow = _shadow,
+        let salt = _salt, let shadow = _shadow,
         dic.count == columns.count else {
           return
       }
