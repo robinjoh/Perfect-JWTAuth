@@ -84,7 +84,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     let fieldDescription = description.joined(separator: ",")
     let sql = """
     CREATE TABLE IF NOT EXISTS users (
-    id VARCHAR(80) PRIMARY KEY NOT NULL,
+    id BIGINT PRIMARY KEY NOT NULL AUTOINCREMENT,
     salt VARCHAR(256), shadow VARCHAR(1024), \(fieldDescription))
     """
     guard db.query(statement: sql) else {
@@ -96,12 +96,6 @@ public class UDBMySQL<Profile>: UserDatabase {
     expiration INTEGER)
     """
     guard db.query(statement: sql2) else {
-      throw Exception.fault(db.errorMessage())
-    }
-    let sql3 = """
-    CREATE INDEX IF NOT EXISTS ticket_exp ON tickets( expiration)
-    """
-    guard db.query(statement: sql3) else {
       throw Exception.fault(db.errorMessage())
     }
   }
@@ -161,7 +155,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     }
   }
 
-  internal func exists(_ id: String) -> Bool {
+  internal func exists(_ id: UInt64) -> Bool {
     let stmt = MySQLStmt(db)
     defer { stmt.close() }
     let sql = "SELECT id FROM users WHERE id = ? LIMIT 1"
@@ -177,9 +171,6 @@ public class UDBMySQL<Profile>: UserDatabase {
   }
 
   public func insert<Profile>(_ record: UserRecord<Profile>) throws {
-    if exists(record.id) {
-      throw Exception.violation
-    }
     let data = try encoder.encode(record.profile)
     let bytes:[UInt8] = data.map { $0 }
     guard let json = String(validatingUTF8:bytes),
@@ -198,7 +189,6 @@ public class UDBMySQL<Profile>: UserDatabase {
       else {
         throw Exception.fault(db.errorMessage())
     }
-    stmt.bindParam(record.id)
     stmt.bindParam(record.salt)
     stmt.bindParam(record.shadow)
     for p in properties {
@@ -208,6 +198,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     guard stmt.execute() else {
       throw Exception.fault(db.errorMessage())
     }
+    record.id = UInt64(stmt.insertId())
   }
 
   public func update<Profile>(_ record: UserRecord<Profile>) throws {
@@ -241,7 +232,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     }
   }
 
-  public func select<Profile>(_ id: String) throws -> UserRecord<Profile> {
+  public func select<Profile>(_ id: UInt64) throws -> UserRecord<Profile> {
     var u: UserRecord<Profile>? = nil
     let columns:[String] = fields.map { $0.name }
     let col = columns.joined(separator: ",")
@@ -274,7 +265,7 @@ public class UDBMySQL<Profile>: UserDatabase {
         let json = try dic.jsonEncodedString()
         let data = Data(json.utf8)
         let profile = try decoder.decode(Profile.self, from: data)
-        u = UserRecord(id: id, salt: salt, shadow: shadow, profile: profile)
+        u = UserRecord(salt: salt, shadow: shadow, profile: profile)
       } catch {
         debugPrint("json failure")
       }
@@ -283,7 +274,7 @@ public class UDBMySQL<Profile>: UserDatabase {
     return v
   }
 
-  public func delete(_ id: String) throws {
+  public func delete(_ id: UInt64) throws {
     guard exists(id) else {
       throw Exception.inexisting
     }

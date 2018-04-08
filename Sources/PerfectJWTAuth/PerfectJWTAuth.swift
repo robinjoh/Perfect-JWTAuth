@@ -25,10 +25,10 @@ import Foundation
 import Dispatch
 
 /// A container structure to hold a user record.
-public struct UserRecord<Profile>: Codable where Profile: Codable {
+public class UserRecord<Profile>: Codable where Profile: Codable {
 
   /// user name or email as the user id, must be valid in terms of character set and length
-  public var id = ""
+  public var id:UInt64 = UInt64.max
 
   /// an automatic generated string for encryption
   public var salt = ""
@@ -45,8 +45,7 @@ public struct UserRecord<Profile>: Codable where Profile: Codable {
   ///   - salt: an automatic generated string for encryption
   ///   - shadow: the CMS key to store in the record other than save the password itself
   ///   - profile: user profile - customizable, must be flat (no nested structures allowed)
-  public init(id: String, salt: String, shadow: String, profile: Profile) {
-    self.id = id
+    public init(salt: String, shadow: String, profile: Profile) {
     self.salt = salt
     self.shadow = shadow
     self.profile = profile
@@ -106,7 +105,7 @@ public protocol LogManager {
   ///   - level: log event level. see `enum LogLevel` for more information
   ///   - event: login events. see `enum LoginManagementEvent` for mor information
   ///   - message: an extra message for this event, could be nil
-  func report(_ userId: String, level: LogLevel, event: LoginManagementEvent, message: String?)
+  func report(level: LogLevel, event: LoginManagementEvent, message: String?)
 }
 
 /// A general protocol for a user database, UDB in short.
@@ -124,7 +123,7 @@ public protocol UserDatabase {
   /// - parameter id: the user id
   /// - returns: a user record instance
   /// - throws: Exception
-  func select<Profile>(_ id: String) throws -> UserRecord<Profile>
+  func select<Profile>(_ id: UInt64) throws -> UserRecord<Profile>
 
   /// update an existing user record to the database
   /// - parameter record: a user record to save
@@ -134,7 +133,7 @@ public protocol UserDatabase {
   /// delete an existing user record by its id
   /// - parameter id: the user id
   /// - throws: Exception
-  func delete(_ id: String) throws
+  func delete(_ id: UInt64) throws
 
   /// put a ticket into the blacklist
   /// - parameter ticket: the ticket to cancel
@@ -153,12 +152,12 @@ public protocol RateLimiter {
   /// an attempt on registration, should throw errors if overrated.
   /// - parameter userId: the user id used to attampt registration
   /// - parameter password: the user password used to attampt registration
-  func onAttemptRegister(_ userId: String, password: String) throws
+  func onAttemptRegister(password: String) throws
 
   /// an attempt on login, should throw errors if overrated.
   /// - parameter userId: the user id used to attampt login
   /// - parameter password: the user password used to attampt login
-  func onAttemptLogin(_ userId: String, password: String) throws
+  func onAttemptLogin(password: String) throws
 
   /// a Login event, should throw errors if overrated.
   /// - parameter record: the user record to login
@@ -179,23 +178,23 @@ public protocol RateLimiter {
   /// an update on password, should throw errors if overrated.
   /// - parameter userId: the user id used to update password
   /// - parameter password: the user password used to update
-  func onUpdate(_ userId: String, password: String) throws
+  func onUpdate(password: String) throws
 
   /// an attempt on deletion user record, should throw errors if overrated.
   /// - parameter userId: the user id used to delete record
-  func onDeletion(_ userId: String) throws
+  func onDeletion(_ userId: UInt64) throws
 }
 
 /// a placeholder of RateLimiter protocol - just doing nothing
 public final class Unlimitated<Profile> : RateLimiter {
-  public func onAttemptRegister(_ userId: String, password: String) throws {}
-  public func onAttemptLogin(_ userId: String, password: String) throws { }
+  public func onAttemptRegister(password: String) throws {}
+  public func onAttemptLogin(password: String) throws { }
   public func onLogin<Profile>(_ record: UserRecord<Profile>) throws { }
   public func onAttemptToken(token: String) throws { }
   public func onRenewToken<Profile>(_ record: UserRecord<Profile>) throws { }
   public func onUpdate<Profile>(_ record: UserRecord<Profile>) throws { }
-  public func onUpdate(_ userId: String, password: String) throws { }
-  public func onDeletion(_ userId: String) throws { }
+  public func onUpdate(password: String) throws { }
+  public func onDeletion(_ userId: UInt64) throws { }
 }
 
 /// Username / Password Quality Control Protocol
@@ -258,9 +257,9 @@ public class LoginManager<Profile> where Profile: Codable {
 
   typealias U = UserRecord<Profile>
   internal let _insert: (_ record: U ) throws -> Void
-  internal let _select: (_ id: String) throws -> U
+  internal let _select: (_ id: UInt64) throws -> U
   internal let _update: (_ record: U) throws -> Void
-  internal let _delete: (_ id: String) throws -> Void
+  internal let _delete: (_ id: UInt64) throws -> Void
   internal let _ban: (_ ticket: String, _ expiration: time_t) throws -> Void
   internal let _isRejected: (_ ticket: String) -> Bool
   /// every instance of LoginManager has a unique manager id, in form of uuid
@@ -347,34 +346,33 @@ public class LoginManager<Profile> where Profile: Codable {
   ///   - password: the user password, will be automatically encoded by URL constraints
   ///   - profile: the user profile to attach
   /// - throws: Exception
-  public func register(id: String, password: String, profile: Profile) throws {
+  public func register(password: String, profile: Profile) throws {
     do {
-      try _rate.onAttemptRegister(id, password: password)
-      try _pass.goodEnough(userId: id)
+      try _rate.onAttemptRegister(password: password)
       try _pass.goodEnough(password: password)
     } catch {
-      _log.report(id, level: .warning, event: .registration, message: error.localizedDescription)
+      _log.report(level: .warning, event: .registration, message: error.localizedDescription)
       throw error
     }
     guard let random = ([UInt8](randomCount: _saltLength)).encode(.hex),
       let salt = String(validatingUTF8: random),
       let shadow = try self.shadow(password, salt: salt)
       else {
-        _log.report(id, level: .critical, event: .registration,
-                    message: "unable to register '\(id)'/'\(password)' because of encryption failure")
+        _log.report(level: .critical, event: .registration,
+                    message: "unable to register '\(password)' because of encryption failure")
         throw Exception.encryption
     }
-    let u = UserRecord<Profile>(id: id, salt: salt, shadow: shadow, profile: profile)
+    var u = UserRecord<Profile>(salt: salt, shadow: shadow, profile: profile)
     _lock.wait()
     do {
       try _insert(u)
       _lock.signal()
     } catch {
-      _log.report(id, level: .warning, event: .registration, message: error.localizedDescription)
+      _log.report(level: .warning, event: .registration, message: error.localizedDescription)
       _lock.signal()
       throw error
     }
-    _log.report(id, level: .event, event: .registration, message: "user registered")
+    _log.report(level: .event, event: .registration, message: "user registered")
   }
 
   /// update a user's password. Would log an updating password event on an available log filer.
@@ -382,20 +380,19 @@ public class LoginManager<Profile> where Profile: Codable {
   ///   - id: the user id, will be automatically encoded by URL constraints
   ///   - password: the user's new password, will be automatically encoded by URL constraints
   /// - throws: Exception
-  public func update(id: String, password: String) throws {
+  public func update(id: UInt64, password: String) throws {
     do {
-      try _rate.onUpdate(id, password: password)
-      try _pass.goodEnough(userId: id)
+      try _rate.onUpdate(password: password)
       try _pass.goodEnough(password: password)
     } catch {
-      _log.report(id, level: .warning, event: .updating, message: error.localizedDescription)
+      _log.report(level: .warning, event: .updating, message: error.localizedDescription)
       throw error
     }
     guard let random = ([UInt8](randomCount: _saltLength)).encode(.hex),
       let salt = String(validatingUTF8: random),
       let shadow = try self.shadow(password, salt: salt)
       else {
-        _log.report("unknown", level: .warning, event: .updating,
+        _log.report(level: .warning, event: .updating,
                     message: "invalid update attempt '\(id)'/'\(password)'")
         throw Exception.encryption
     }
@@ -407,11 +404,11 @@ public class LoginManager<Profile> where Profile: Codable {
       try self._update(u)
       _lock.signal()
     } catch {
-      _log.report(id, level: .warning, event: .updating, message: error.localizedDescription)
+      _log.report(level: .warning, event: .updating, message: error.localizedDescription)
       _lock.signal()
       throw error
     }
-    _log.report(id, level: .event, event: .updating, message: "password updated")
+    _log.report(level: .event, event: .updating, message: "password updated")
   }
 
   /// update a user's profile. Would log an updating profile event on an available log filer.
@@ -419,13 +416,7 @@ public class LoginManager<Profile> where Profile: Codable {
   ///   - id: the user id, will be automatically encoded by URL constraints
   ///   - profile: the user's new profile
   /// - throws: Exception
-  public func update(id: String, profile: Profile) throws {
-    do {
-      try _pass.goodEnough(userId: id)
-    } catch {
-      _log.report(id, level: .warning, event: .updating, message: error.localizedDescription)
-      throw error
-    }
+  public func update(id: UInt64, profile: Profile) throws {
     do {
       _lock.wait()
       var u = try self._select(id)
@@ -436,11 +427,11 @@ public class LoginManager<Profile> where Profile: Codable {
       try self._update(u)
       _lock.signal()
     } catch {
-      _log.report(id, level: .warning, event: .updating, message: error.localizedDescription)
+      _log.report(level: .warning, event: .updating, message: error.localizedDescription)
       _lock.signal()
       throw error
     }
-    _log.report(id, level: .event, event: .updating, message: "profile updated")
+    _log.report(level: .event, event: .updating, message: "profile updated")
   }
 
   /// perform a user login to generate and return a valid jwt token.
@@ -452,15 +443,14 @@ public class LoginManager<Profile> where Profile: Codable {
   ///   - timeout: optional, jwt token valid period, in seconds. 600 by default (10 min)
   ///   - headers: optional, extra headers to issue, empty by default.
   /// - returns: a valid jwt token
-  public func login(id: String, password: String,
+  public func login(id: UInt64, password: String,
                      subject: String = "", timeout: Int = 600,
                      headers: [String:Any] = [:]) throws -> String {
     do {
-      try _pass.goodEnough(userId: id)
       try _pass.goodEnough(password: password)
-      try _rate.onAttemptLogin(id, password: password)
+      try _rate.onAttemptLogin(password: password)
     } catch {
-      _log.report(id, level: .warning, event: .login, message: error.localizedDescription)
+      _log.report(level: .warning, event: .login, message: error.localizedDescription)
       throw error
     }
     let u: U
@@ -470,14 +460,14 @@ public class LoginManager<Profile> where Profile: Codable {
       _lock.signal()
       try _rate.onLogin(u)
     } catch {
-      _log.report(id, level: .warning, event: .login, message: error.localizedDescription)
+      _log.report(level: .warning, event: .login, message: error.localizedDescription)
       _lock.signal()
       throw error
     }
     do {
       try match(password, salt: u.salt, shadow: u.shadow)
     } catch (let err) {
-        _log.report(id, level: .warning, event: .login,
+        _log.report(level: .warning, event: .login,
                     message: err.localizedDescription)
         throw err
     }
@@ -498,12 +488,12 @@ public class LoginManager<Profile> where Profile: Codable {
     do {
       try _rate.onAttemptToken(token: token)
     } catch {
-      _log.report("unknown", level: .warning, event: .verification, message: error.localizedDescription)
+      _log.report(level: .warning, event: .verification, message: error.localizedDescription)
       throw error
     }
     guard let jwt = JWTVerifier(token),
-      let id = jwt.payload["aud"] as? String else {
-      _log.report("unknown", level: .warning, event: .verification,
+      let id = jwt.payload["aud"] as? UInt64 else {
+      _log.report(level: .warning, event: .verification,
                   message: "jwt verification failure")
       throw Exception.access
     }
@@ -513,14 +503,14 @@ public class LoginManager<Profile> where Profile: Codable {
       u = try _select(id)
       _lock.signal()
     } catch {
-      _log.report(id, level: .warning, event: .verification, message: error.localizedDescription)
+      _log.report(level: .warning, event: .verification, message: error.localizedDescription)
       throw error
     }
     let now = time(nil)
     do {
       try jwt.verify(algo: _alg, key: HMACKey(u.salt))
     } catch {
-      _log.report(id, level: .warning, event: .verification,
+      _log.report(level: .warning, event: .verification,
                   message: "jwt verification failure: \(token)")
       throw Exception.access
     }
@@ -538,7 +528,7 @@ public class LoginManager<Profile> where Profile: Codable {
       nbf <= now,
       let ticket = jwt.payload["jit"] as? String
       else {
-        _log.report(id, level: .warning, event: .verification,
+        _log.report(level: .warning, event: .verification,
                     message: "jwt invalid payload: \(jwt.payload)")
         throw Exception.malformed
     }
@@ -548,7 +538,7 @@ public class LoginManager<Profile> where Profile: Codable {
     _lock.signal()
 
     if rejected {
-      _log.report(id, level: .warning, event: .verification, message: "rejected")
+      _log.report(level: .warning, event: .verification, message: "rejected")
       throw Exception.access
     }
 
@@ -558,7 +548,7 @@ public class LoginManager<Profile> where Profile: Codable {
         try _ban(ticket, timeout)
         _lock.signal()
       } catch {
-        _log.report(id, level: .warning, event: .logoff,
+        _log.report(level: .warning, event: .logoff,
                     message: "log out failure:" + error.localizedDescription )
         _lock.signal()
         throw error
@@ -579,7 +569,7 @@ public class LoginManager<Profile> where Profile: Codable {
     ]
 
     guard let jwt = JWTCreator(payload: claims) else {
-      _log.report(u.id, level: .critical, event: .login,
+      _log.report(level: .critical, event: .login,
                   message: "token failure")
       throw Exception.malformed
     }
@@ -588,11 +578,11 @@ public class LoginManager<Profile> where Profile: Codable {
     do {
       ret = try jwt.sign(alg: _alg, key: u.salt, headers: headers)
     } catch {
-      _log.report(u.id, level: .critical, event: .login,
+      _log.report(level: .critical, event: .login,
                   message: "jwt signature failure: \(error.localizedDescription)")
       throw error
     }
-    _log.report(u.id, level: .event, event: .login, message: "user logged")
+    _log.report(level: .event, event: .login, message: "user logged")
     return ret
   }
 
@@ -605,15 +595,10 @@ public class LoginManager<Profile> where Profile: Codable {
   ///   - headers: optional, extra headers to issue, empty by default.
   /// - throws: Exception
   /// - returns: a valid jwt token
-  public func renew(id: String,
+  public func renew(id: UInt64,
                     subject: String = "", timeout: Int = 600,
                     headers: [String:Any] = [:]) throws -> String {
-    do {
-      try _pass.goodEnough(userId: id)
-    } catch {
-      _log.report(id, level: .warning, event: .renewal, message: error.localizedDescription)
-      throw error
-    }
+   
     let u: U
     do {
       _lock.wait()
@@ -621,7 +606,7 @@ public class LoginManager<Profile> where Profile: Codable {
       _lock.signal()
       try _rate.onRenewToken(u)
     } catch {
-      _log.report(id, level: .warning, event: .renewal, message: error.localizedDescription)
+      _log.report(level: .warning, event: .renewal, message: error.localizedDescription)
       throw error
     }
     return try self.renew(u: u, subject: subject, timeout: timeout, headers: headers)
@@ -631,7 +616,7 @@ public class LoginManager<Profile> where Profile: Codable {
   /// - parameter id: the user id
   /// - throws: Exception
   /// - returns: the user profile
-  public func load(id: String) throws -> Profile {
+  public func load(id: UInt64) throws -> Profile {
     do {
       _lock.wait()
       let p = try _select(id).profile
@@ -646,16 +631,15 @@ public class LoginManager<Profile> where Profile: Codable {
   /// drop a user record by its id
   /// - parameter id: the user id
   /// - throws: Exception
-  public func drop(id: String) throws {
+  public func drop(id: UInt64) throws {
     do {
-      try _pass.goodEnough(userId: id)
       try _rate.onDeletion(id)
       _lock.wait()
       try _delete(id)
       _lock.signal()
-      _log.report(id, level: .event, event: .unregistration, message: "user closed")
+      _log.report(level: .event, event: .unregistration, message: "user closed")
     } catch {
-      _log.report(id, level: .warning, event: .unregistration, message: error.localizedDescription)
+      _log.report(level: .warning, event: .unregistration, message: error.localizedDescription)
       _lock.signal()
       throw error
     }
@@ -908,7 +892,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
       headers = json ?? [:]
     }
 
-    try _man.register(id: id, password: password, profile: try profile(of: json))
+    try _man.register(password: password, profile: try profile(of: json))
     return try login(id: id, password: password, extra: headers)
   }
 
@@ -930,7 +914,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
   }
 
   internal func login(id: String, password: String, extra: [String:Any] = [:]) throws -> String {
-    return try _man.login(id: id, password: password, headers: extra)
+    return try _man.login(id: UInt64(id)!,password: password, headers: extra)
   }
 
 
@@ -956,7 +940,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
       throw Exception.malformed
     }
     let p = try profile(of: json)
-    try _man.update(id: id, profile: p)
+    try _man.update(id: UInt64(id)!, profile: p)
   }
 
   internal func modpass(request: HTTPRequest) throws {
@@ -971,7 +955,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
     guard let id = content[_config.aud] as? String else {
       throw Exception.malformed
     }
-    try _man.update(id: id, password: newpass)
+    try _man.update(id: UInt64(id)!, password: newpass)
   }
 
   internal func access(request: HTTPRequest) throws -> (String,Profile,[String:Any]) {
@@ -992,7 +976,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
       throw Exception.malformed
     }
 
-    let p = try _man.load(id: id)
+    let p = try _man.load(id: UInt64(id)!)
 
     if iss == _man.issuer {
       return (id, p, h)
@@ -1018,7 +1002,7 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
     guard let id = content[_config.aud] as? String else {
       throw Exception.malformed
     }
-    return try _man.renew(id: id)
+    return try _man.renew(id: UInt64(id)!)
   }
 
   internal func logout(request: HTTPRequest) throws {
@@ -1041,6 +1025,6 @@ public class HTTPAccessControl<Profile>: HTTPRequestFilter where Profile:Codable
     guard let id = content[_config.aud] as? String else {
       throw Exception.malformed
     }
-    _ = try _man.drop(id: id)
-  }
+    _ = try _man.drop(id: UInt64(id)!)
+    }
 }

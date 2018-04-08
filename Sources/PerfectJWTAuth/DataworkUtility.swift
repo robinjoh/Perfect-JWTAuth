@@ -108,9 +108,9 @@ public final class StdLogger: LogManager {
             String(format: "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec))
   }
 
-  public func report(_ userId: String, level: LogLevel, event: LoginManagementEvent, message: String?) {
+  public func report(level: LogLevel, event: LoginManagementEvent, message: String?) {
     let t = StdLogger.timestamp()
-    print(t.0, t.1, userId, level, event, message ?? "")
+    print(t.0, t.1, level, event, message ?? "")
   }
 }
 
@@ -144,11 +144,10 @@ public class FileLogger: LogManager {
   ///   - level: log event level. see `enum LogLevel` for more information
   ///   - event: login events. see `enum LoginManagementEvent` for mor information
   ///   - message: an extra text message for this event, could be nil
-  public func report(_ userId: String, level: LogLevel = .event, event: LoginManagementEvent, message: String? = nil) {
+  public func report(level: LogLevel = .event, event: LoginManagementEvent, message: String? = nil) {
     let t = StdLogger.timestamp(self._gmt)
     var r = LogRecord()
     r.id = UUID().string
-    r.userId = userId
     r.level = level.rawValue
     r.event = event.rawValue
     r.timestamp = t.0 + " " + t.1
